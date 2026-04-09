@@ -1,0 +1,73 @@
+import pandas as pd
+
+# ── Load your two CSV files ──────────────────────────────────────────
+# Replace these filenames with your actual file names
+sold     = pd.read_csv('CRMLSSold202602.csv',    encoding='latin-1')
+listings = pd.read_csv('CRMLSListing202602.csv', encoding='latin-1')
+
+# ── Basic inspection (Week 2 EDA) ────────────────────────────────────
+print("=== SOLD DATASET ===")
+print(f"Rows: {len(sold)}, Columns: {len(sold.columns)}")
+print(sold.dtypes)          # column data types
+print(sold.head())           # first 5 rows
+
+print("\n=== LISTINGS DATASET ===")
+print(f"Rows: {len(listings)}, Columns: {len(listings.columns)}")
+print(listings.dtypes)
+print(listings.head())
+
+# ── Check what property types exist ──────────────────────────────────
+print("\nProperty types in SOLD:")
+print(sold['PropertyType'].value_counts())
+
+print("\nProperty types in LISTINGS:")
+print(listings['PropertyType'].value_counts())
+
+# ── Filter to Residential only ────────────────────────────────────────
+sold_res     = sold[sold['PropertyType'] == 'Residential']
+listings_res = listings[listings['PropertyType'] == 'Residential']
+
+print(f"\nSold before filter: {len(sold)} → after: {len(sold_res)}")
+print(f"Listings before filter: {len(listings)} → after: {len(listings_res)}")
+
+# ── Missing value check ───────────────────────────────────────────────
+print("\n=== MISSING VALUES (SOLD) ===")
+missing = sold_res.isnull().sum()
+missing_pct = (missing / len(sold_res) * 100).round(1)
+missing_report = pd.DataFrame({'count': missing, 'pct': missing_pct})
+print(missing_report[missing_report['count'] > 0].sort_values('pct', ascending=False))
+
+# ── Week 2: Flag columns with >90% missing (drop candidates) ─────────
+print("\n=== COLUMNS TO DROP (>90% missing) ===")
+threshold = 0.90
+missing_sold = sold_res.isnull().mean()
+drop_cols = missing_sold[missing_sold >= threshold].index.tolist()
+print(drop_cols)
+
+# Drop them
+sold_clean = sold_res.drop(columns=drop_cols)
+print(f"\nColumns before drop: {len(sold_res.columns)} → after: {len(sold_clean.columns)}")
+
+# ── Numeric distribution summary ──────────────────────────────────────
+print("\n=== NUMERIC SUMMARY (key fields) ===")
+key_fields = ['ClosePrice', 'LivingArea', 'DaysOnMarket']
+
+# Only include fields that actually exist in the dataset
+key_fields = [f for f in key_fields if f in sold_clean.columns]
+
+print(sold_clean[key_fields].describe(percentiles=[.25, .50, .75, .90, .95]))
+
+# ── Flag geographic data issues ───────────────────────────────────────
+sold_clean = sold_clean.copy()
+sold_clean['flag_missing_coords'] = sold_clean['Latitude'].isnull() | sold_clean['Longitude'].isnull()
+sold_clean['flag_zero_coords']    = (sold_clean['Latitude'] == 0) | (sold_clean['Longitude'] == 0)
+sold_clean['flag_bad_longitude']  = sold_clean['Longitude'] > 0  # CA should be negative
+
+print("\n=== GEOGRAPHIC FLAGS ===")
+print(f"Missing coords:  {sold_clean['flag_missing_coords'].sum()}")
+print(f"Zero coords:     {sold_clean['flag_zero_coords'].sum()}")
+print(f"Bad longitude:   {sold_clean['flag_bad_longitude'].sum()}")
+
+# ── Save cleaned dataset ──────────────────────────────────────────────
+sold_clean.to_csv('sold_residential_clean.csv', index=False)
+print("\nSaved: sold_residential_clean.csv")
