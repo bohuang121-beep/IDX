@@ -1,0 +1,90 @@
+import pandas as pd
+
+# ── Week 1: Load and concatenate all monthly files ────────────────────
+sold_feb = pd.read_csv('CRMLSSold202602.csv', encoding='latin-1')
+sold_mar = pd.read_csv('CRMLSSold202603.csv', encoding='latin-1')
+
+list_feb = pd.read_csv('CRMLSListing202602.csv', encoding='latin-1')
+list_mar = pd.read_csv('CRMLSListing202603.csv', encoding='latin-1')
+
+# Concatenate months together
+sold_all = pd.concat([sold_feb, sold_mar], ignore_index=True)
+listings_all = pd.concat([list_feb, list_mar], ignore_index=True)
+
+print(f"Sold Feb: {len(sold_feb)}, Mar: {len(sold_mar)}, Combined: {len(sold_all)}")
+print(f"Listings Feb: {len(list_feb)}, Mar: {len(list_mar)}, Combined: {len(listings_all)}")
+
+# Filter to Residential only
+sold_res = sold_all[sold_all['PropertyType'] == 'Residential'].copy()
+listings_res = listings_all[listings_all['PropertyType'] == 'Residential'].copy()
+
+print(f"\nAfter Residential filter:")
+print(f"Sold: {len(sold_res)}, Listings: {len(listings_res)}")
+
+# ── PART 2: FRED Mortgage Rate Merge ─────────────────────────────────
+url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=MORTGAGE30US"
+mortgage = pd.read_csv(url)
+mortgage.columns = ['date', 'rate_30yr_fixed']
+mortgage['date'] = pd.to_datetime(mortgage['date'])
+
+# Resample weekly → monthly average
+mortgage['year_month'] = mortgage['date'].dt.to_period('M')
+mortgage_monthly = (
+    mortgage.groupby('year_month')['rate_30yr_fixed']
+    .mean().reset_index()
+)
+print("\nRecent monthly rates:")
+print(mortgage_monthly.tail(3))
+
+# Create join keys
+sold_res['year_month'] = pd.to_datetime(sold_res['CloseDate'], errors='coerce').dt.to_period('M')
+listings_res['year_month'] = pd.to_datetime(listings_res['ListingContractDate'], errors='coerce').dt.to_period('M')
+
+# Merge
+sold_with_rates = sold_res.merge(mortgage_monthly, on='year_month', how='left')
+listings_with_rates = listings_res.merge(mortgage_monthly, on='year_month', how='left')
+
+print(f"\nNull rates in sold:     {sold_with_rates['rate_30yr_fixed'].isnull().sum()}")
+print(f"Null rates in listings: {listings_with_rates['rate_30yr_fixed'].isnull().sum()}")
+
+# ── PART 3: Data Cleaning ─────────────────────────────────────────────
+
+# Convert date columns to datetime
+date_cols = ['CloseDate', 'PurchaseContractDate', 'ListingContractDate', 'ContractStatusChangeDate']
+for col in date_cols:
+    if col in sold_with_rates.columns:
+        sold_with_rates[col] = pd.to_datetime(sold_with_rates[col], errors='coerce')
+
+# Flag invalid numeric values
+sold_with_rates['flag_invalid_price'] = sold_with_rates['ClosePrice'] <= 0
+sold_with_rates['flag_invalid_area']  = sold_with_rates['LivingArea'] <= 0
+sold_with_rates['flag_invalid_dom']   = sold_with_rates['DaysOnMarket'] < 0
+
+print(f"\nInvalid prices:      {sold_with_rates['flag_invalid_price'].sum()}")
+print(f"Invalid living area: {sold_with_rates['flag_invalid_area'].sum()}")
+print(f"Invalid DOM:         {sold_with_rates['flag_invalid_dom'].sum()}")
+
+# Date consistency flags
+sold_with_rates['listing_after_close_flag'] = (
+    sold_with_rates['ListingContractDate'] > sold_with_rates['CloseDate']
+)
+sold_with_rates['purchase_after_close_flag'] = (
+    sold_with_rates['PurchaseContractDate'] > sold_with_rates['CloseDate']
+)
+
+print(f"Listing after close:  {sold_with_rates['listing_after_close_flag'].sum()}")
+print(f"Purchase after close: {sold_with_rates['purchase_after_close_flag'].sum()}")
+
+# Geographic flags
+sold_with_rates['flag_missing_coords'] = (
+    sold_with_rates['Latitude'].isnull() | sold_with_rates['Longitude'].isnull()
+)
+sold_with_rates['flag_bad_longitude'] = sold_with_rates['Longitude'] > 0
+
+print(f"Missing coords:  {sold_with_rates['flag_missing_coords'].sum()}")
+print(f"Bad longitude:   {sold_with_rates['flag_bad_longitude'].sum()}")
+
+# ── Save ──────────────────────────────────────────────────────────────
+sold_with_rates.to_csv('sold_enriched.csv', index=False)
+listings_with_rates.to_csv('listings_enriched.csv', index=False)
+print("\nSaved: sold_enriched.csv and listings_enriched.csv")
